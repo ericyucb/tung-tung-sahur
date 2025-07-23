@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# Pytest cache
+.pytest_cache/
+
+# VSCode settings
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Temporary files
+*.log
+*.tmp
+*.swp
