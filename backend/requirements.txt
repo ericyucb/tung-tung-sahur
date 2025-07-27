@@ -1,4 +1,6 @@
 fastapi
 boto3
 python-dotenv
-uvicorn 
+uvicorn
+matplotlib
+pillow 

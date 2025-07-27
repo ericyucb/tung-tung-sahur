@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SAM2 Segmentation Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .image-container { position: relative; display: inline-block; margin: 20px 0; }
+        .image-container img { max-width: 400px; border: 2px solid #ccc; }
+        .points-list { margin: 10px 0; }
+        button { margin: 5px; padding: 10px 15px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .segmented-image { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SAM2 Segmentation Test</h1>
+        
+        <div>
+            <h3>Test with existing video frame:</h3>
+            <div class="image-container">
+                <img id="testImage" src="http://3.237.40.252:8000/static/adam_nelson_v2_v1_ltr.mov_first_frame.jpg" 
+                     onclick="handleImageClick(event)" style="cursor: crosshair;">
+            </div>
+            
+            <div class="points-list">
+                <h4>Selected Points:</h4>
+                <div id="pointsList"></div>
+            </div>
+            
+            <button onclick="runSegmentation()" id="segmentBtn" disabled>Run Segmentation</button>
+            <button onclick="resetPoints()">Reset Points</button>
+        </div>
+        
+        <div class="segmented-image" id="segmentedResult" style="display: none;">
+            <h3>Segmentation Result:</h3>
+            <img id="segmentedImage" style="max-width: 400px; border: 2px solid #green;">
+            <br><br>
+            <button onclick="acceptSegmentation()">Accept Segmentation</button>
+            <button onclick="tryAgain()">Try Again</button>
+        </div>
+        
+        <div id="message"></div>
+    </div>
+
+    <script>
+        let points = [];
+        let videoFilename = 'adam_nelson_v2_v1_ltr.mov';
+        
+        function handleImageClick(e) {
+            const rect = e.target.getBoundingClientRect();
+            const img = e.target;
+            
+            // Get the actual displayed dimensions
+            const displayWidth = img.offsetWidth;
+            const displayHeight = img.offsetHeight;
+            
+            // Get the natural (original) dimensions
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+            
+            // Calculate the click position relative to the displayed image
+            const displayX = Math.round(e.clientX - rect.left);
+            const displayY = Math.round(e.clientY - rect.top);
+            
+            // Scale the coordinates to match the original image dimensions
+            const originalX = Math.round((displayX / displayWidth) * naturalWidth);
+            const originalY = Math.round((displayY / displayHeight) * naturalHeight);
+            
+            points.push({x: originalX, y: originalY});
+            updatePointsList();
+            document.getElementById('segmentBtn').disabled = points.length === 0;
+        }
+        
+        function updatePointsList() {
+            const list = document.getElementById('pointsList');
+            list.innerHTML = points.map((pt, idx) => 
+                `<div>Point ${idx + 1}: (${pt.x}, ${pt.y})</div>`
+            ).join('');
+        }
+        
+        function resetPoints() {
+            points = [];
+            updatePointsList();
+            document.getElementById('segmentBtn').disabled = true;
+            document.getElementById('segmentedResult').style.display = 'none';
+            document.getElementById('message').innerHTML = '';
+        }
+        
+        async function runSegmentation() {
+            if (points.length === 0) return;
+            
+            document.getElementById('segmentBtn').disabled = true;
+            document.getElementById('message').innerHTML = 'Running segmentation...';
+            
+            try {
+                const response = await fetch('http://3.237.40.252:8000/segment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        points: points,
+                        video_filename: videoFilename 
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('message').innerHTML = 'Segmentation completed!';
+                    document.getElementById('segmentedImage').src = `http://3.237.40.252:8000${data.segmented_image_url}`;
+                    document.getElementById('segmentedResult').style.display = 'block';
+                } else {
+                    document.getElementById('message').innerHTML = 'Error: ' + (data.error || 'Segmentation failed');
+                }
+            } catch (err) {
+                document.getElementById('message').innerHTML = 'Error: ' + err.message;
+            } finally {
+                document.getElementById('segmentBtn').disabled = false;
+            }
+        }
+        
+        function acceptSegmentation() {
+            document.getElementById('message').innerHTML = 'Segmentation accepted! Moving to next step...';
+        }
+        
+        function tryAgain() {
+            resetPoints();
+        }
+    </script>
+</body>
+</html> 

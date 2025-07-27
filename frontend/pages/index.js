@@ -5,11 +5,17 @@ export default function Home() {
   const [message, setMessage] = useState('');
   const [firstFrameUrl, setFirstFrameUrl] = useState(null);
   const [points, setPoints] = useState([]);
+  const [segmentedImageUrl, setSegmentedImageUrl] = useState(null);
+  const [isSegmenting, setIsSegmenting] = useState(false);
+  const [videoFilename, setVideoFilename] = useState(null);
+  const [imageRef, setImageRef] = useState(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
     setFirstFrameUrl(null);
     setPoints([]);
+    setSegmentedImageUrl(null);
+    setVideoFilename(null);
   };
 
   const handleSubmit = async (e) => {
@@ -26,16 +32,17 @@ export default function Home() {
         body: formData,
       });
       const data = await res.json();
-      if (res.ok) {
-        setMessage('Upload successful: ' + data.video_filename);
-        // Compose absolute URL for the first frame
-        let url = data.first_frame_url;
-        if (url && !url.startsWith('http')) {
-          // Assume backend and frontend are on same host for dev
-          url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
-        }
-        setFirstFrameUrl(url);
-      } else {
+                   if (res.ok) {
+               setMessage('Upload successful: ' + data.video_filename);
+               setVideoFilename(data.video_filename);
+               // Compose absolute URL for the first frame
+               let url = data.first_frame_url;
+               if (url && !url.startsWith('http')) {
+                 // Assume backend and frontend are on same host for dev
+                 url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
+               }
+               setFirstFrameUrl(url);
+             } else {
         setMessage('Error: ' + (data.error || 'Unknown error'));
       }
     } catch (err) {
@@ -46,10 +53,27 @@ export default function Home() {
   const handleImageClick = async (e) => {
     if (!firstFrameUrl) return;
     const rect = e.target.getBoundingClientRect();
-    const x = Math.round(e.nativeEvent.clientX - rect.left);
-    const y = Math.round(e.nativeEvent.clientY - rect.top);
-    const newPoints = [...points, { x, y }];
+    const img = e.target;
+    
+    // Get the actual displayed dimensions
+    const displayWidth = img.offsetWidth;
+    const displayHeight = img.offsetHeight;
+    
+    // Get the natural (original) dimensions
+    const naturalWidth = img.naturalWidth;
+    const naturalHeight = img.naturalHeight;
+    
+    // Calculate the click position relative to the displayed image
+    const displayX = Math.round(e.nativeEvent.clientX - rect.left);
+    const displayY = Math.round(e.nativeEvent.clientY - rect.top);
+    
+    // Scale the coordinates to match the original image dimensions
+    const originalX = Math.round((displayX / displayWidth) * naturalWidth);
+    const originalY = Math.round((displayY / displayHeight) * naturalHeight);
+    
+    const newPoints = [...points, { x: originalX, y: originalY }];
     setPoints(newPoints);
+    
     // Send to backend
     try {
       await fetch(`${process.env.NEXT_PUBLIC_API_URL}/coords`, {
@@ -60,6 +84,48 @@ export default function Home() {
     } catch (err) {
       // Optionally handle error
     }
+  };
+
+  const handleSegment = async () => {
+    if (!points.length || !videoFilename) return;
+    
+    setIsSegmenting(true);
+    setMessage('Running SAM2 segmentation...');
+    
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          points: points,
+          video_filename: videoFilename 
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setMessage('Segmentation completed!');
+        // Compose absolute URL for the segmented image
+        let url = data.segmented_image_url;
+        if (url && !url.startsWith('http')) {
+          url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
+        }
+        setSegmentedImageUrl(url);
+      } else {
+        setMessage('Error: ' + (data.error || 'Segmentation failed'));
+      }
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    } finally {
+      setIsSegmenting(false);
+    }
+  };
+
+  const handleReset = () => {
+    setPoints([]);
+    setSegmentedImageUrl(null);
+    setMessage('Points reset. Click on the image to select new points.');
   };
 
   return (
@@ -91,6 +157,7 @@ export default function Home() {
             <h2 className="font-bold mb-2">First Frame (click to select points):</h2>
             <div style={{ position: 'relative', display: 'inline-block' }}>
               <img
+                ref={setImageRef}
                 src={firstFrameUrl}
                 alt="First frame"
                 style={{ maxWidth: 400, borderRadius: 8, cursor: 'crosshair' }}
@@ -101,24 +168,73 @@ export default function Home() {
                 style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
                 width="100%"
                 height="100%"
-                viewBox={`0 0 400 225`}
                 preserveAspectRatio="none"
               >
-                {points.map((pt, idx) => (
-                  <circle key={idx} cx={pt.x} cy={pt.y} r={5} fill="red" />
-                ))}
+                {points.map((pt, idx) => {
+                  // Scale the original coordinates back to displayed size for visualization
+                  if (!imageRef) return null;
+                  const displayX = (pt.x / imageRef.naturalWidth) * imageRef.offsetWidth;
+                  const displayY = (pt.y / imageRef.naturalHeight) * imageRef.offsetHeight;
+                  return (
+                    <circle key={idx} cx={displayX} cy={displayY} r={5} fill="red" />
+                  );
+                })}
               </svg>
             </div>
-            <div className="mt-4 text-left">
-              <h3 className="font-semibold">Selected Points:</h3>
-              <ul className="text-sm">
-                {points.map((pt, idx) => (
-                  <li key={idx}>({pt.x}, {pt.y})</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+                               <div className="mt-4 text-left">
+                     <h3 className="font-semibold">Selected Points:</h3>
+                     <ul className="text-sm">
+                       {points.map((pt, idx) => (
+                         <li key={idx}>({pt.x}, {pt.y})</li>
+                       ))}
+                     </ul>
+                     {points.length > 0 && (
+                       <div className="mt-4 flex gap-2">
+                         <button
+                           onClick={handleSegment}
+                           disabled={isSegmenting}
+                           className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:opacity-50"
+                         >
+                           {isSegmenting ? 'Segmenting...' : 'Run SAM2 Segmentation'}
+                         </button>
+                         <button
+                           onClick={handleReset}
+                           className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                         >
+                           Reset Points
+                         </button>
+                       </div>
+                     )}
+                   </div>
+                 </div>
+               )}
+               
+               {segmentedImageUrl && (
+                 <div className="mt-8">
+                   <h2 className="font-bold mb-2">SAM2 Segmentation Result:</h2>
+                   <div className="mb-4">
+                     <img
+                       src={segmentedImageUrl}
+                       alt="Segmented frame"
+                       style={{ maxWidth: 400, borderRadius: 8 }}
+                     />
+                   </div>
+                   <div className="flex gap-2">
+                     <button
+                       onClick={() => setMessage('Segmentation accepted! Moving to next step...')}
+                       className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                     >
+                       Accept Segmentation
+                     </button>
+                     <button
+                       onClick={handleReset}
+                       className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+                     >
+                       Try Again
+                     </button>
+                   </div>
+                 </div>
+               )}
       </div>
     </div>
   );

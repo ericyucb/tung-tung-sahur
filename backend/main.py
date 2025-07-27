@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import tempfile
 import subprocess
 import json
+import numpy as np
 
 load_dotenv()
 
@@ -80,4 +81,58 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 async def receive_coords(request: Request):
     data = await request.json()
     print("Received coordinates from frontend:", data)
-    return {"message": "Coordinates received", "coords": data} 
+    return {"message": "Coordinates received", "coords": data}
+
+@app.post("/segment")
+async def segment_frame(request: Request):
+    try:
+        data = await request.json()
+        points = data.get('points', [])
+        video_filename = data.get('video_filename')
+        
+        if not points or not video_filename:
+            return JSONResponse(status_code=400, content={"error": "Missing points or video_filename"})
+        
+        # Convert points to the format expected by SAM2
+        points_np = np.array([[p['x'], p['y']] for p in points], dtype=np.float32)
+        labels = np.ones(len(points), dtype=np.int32)  # All positive points
+        
+        # Find the first frame path
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        first_frame_path = os.path.join(static_dir, f'{video_filename}_first_frame.jpg')
+        
+        if not os.path.exists(first_frame_path):
+            return JSONResponse(status_code=404, content={"error": "First frame not found"})
+        
+        # Create a temporary directory for the frame
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame_dir = tmpdir
+            # Copy the first frame to the temp directory
+            import shutil
+            temp_frame_path = os.path.join(frame_dir, "00001.jpg")
+            shutil.copy(first_frame_path, temp_frame_path)
+            
+            # Run simple segmentation
+            subprocess.run([
+                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                '--frame', temp_frame_path,
+                '--points', json.dumps(points_np.tolist()),
+                '--frame_dir', frame_dir
+            ], check=True)
+            
+            # Find the segmented image
+            segmented_path = os.path.splitext(temp_frame_path)[0] + '_segmented.png'
+            if os.path.exists(segmented_path):
+                # Copy to static directory
+                static_segmented_path = os.path.join(static_dir, f'{video_filename}_segmented.png')
+                shutil.copy(segmented_path, static_segmented_path)
+                
+                return {
+                    "message": "Segmentation completed",
+                    "segmented_image_url": f"/static/{video_filename}_segmented.png"
+                }
+            else:
+                return JSONResponse(status_code=500, content={"error": "Segmentation failed"})
+                
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)}) 
