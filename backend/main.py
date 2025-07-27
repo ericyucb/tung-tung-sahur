@@ -53,7 +53,7 @@ async def upload_video(file: UploadFile = File(...)):
             first_frame_path = os.path.join(tmpdir, 'first_frame.jpg')
             # Call inference.py to extract first frame
             subprocess.run([
-                'python', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
                 '--input', local_video_path,
                 '--output', first_frame_path
             ], check=True)

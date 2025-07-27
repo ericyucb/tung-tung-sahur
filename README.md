@@ -28,7 +28,7 @@ This template provides a basic setup for uploading videos from a Next.js fronten
   ```
 - Run the server:
   ```bash
-  python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+  python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
   ```
 
 ### 2. Frontend (Next.js)
@@ -54,7 +54,46 @@ This template provides a basic setup for uploading videos from a Next.js fronten
 - You will receive a success message when the upload is complete.
 
 ## Notes
-- The backend **no longer runs inference** or processes the video after upload. It simply stores the uploaded file in S3.
+- The backend extracts the first frame from uploaded videos and displays it on the frontend.
+- Users can click on the first frame to select points for segmentation.
 - All video uploads go through the backend; the frontend does not upload directly to S3.
 - The backend is ready to be containerized for EC2 deployment.
 - Make sure your AWS credentials and bucket permissions are set correctly.
+
+## EC2 Deployment
+
+### Backend Deployment on EC2
+1. **Connect to your EC2 instance:**
+   ```bash
+   ssh -i backend/sam2-key-private.pem ec2-user@YOUR_EC2_IP
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   sudo yum update -y
+   sudo yum install -y python3-pip
+   pip3 install -r backend/requirements.txt
+   pip3 install python-multipart opencv-python
+   sudo yum install -y mesa-libGL
+   ```
+
+3. **Upload your code to EC2:**
+   ```bash
+   scp -i backend/sam2-key-private.pem -r backend/ ec2-user@YOUR_EC2_IP:~/
+   ```
+
+4. **Start the server:**
+   ```bash
+   cd backend
+   python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+   ```
+
+5. **Configure Security Group:**
+   - Add inbound rule for port 8000 (Custom TCP)
+   - Source: 0.0.0.0/0
+
+### Frontend Configuration
+Update your frontend `.env.local` to point to your EC2 backend:
+```
+NEXT_PUBLIC_API_URL=http://YOUR_EC2_IP:8000
+```

@@ -25,3 +25,8 @@ env/
 *.log
 *.tmp
 *.swp
+
+allcode.py
+
+sam2-key-private.pem
+sam2.1_hiera_base_plus.pt

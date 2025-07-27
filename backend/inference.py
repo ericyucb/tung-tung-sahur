@@ -1,39 +1,50 @@
-import cv2
+import os
 import sys
-import json
+import cv2
+import argparse
 
-def extract_first_frame(video_path, output_image_path):
-    cap = cv2.VideoCapture(video_path)
-    ret, frame = cap.read()
-    if not ret:
-        print(f"Failed to read video: {video_path}")
+def extract_first_frame(video_path, output_path):
+    """Extract the first frame from a video file."""
+    try:
+        # Open the video file
+        cap = cv2.VideoCapture(video_path)
+        
+        # Check if video opened successfully
+        if not cap.isOpened():
+            print(f"Error: Could not open video file {video_path}")
+            return False
+        
+        # Read the first frame
+        ret, frame = cap.read()
+        
+        if not ret:
+            print(f"Error: Could not read first frame from {video_path}")
+            cap.release()
+            return False
+        
+        # Save the frame
+        cv2.imwrite(output_path, frame)
+        
+        # Release the video capture object
+        cap.release()
+        
+        print(f"First frame extracted and saved to {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"Error extracting first frame: {e}")
+        return False
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract first frame from video")
+    parser.add_argument('--input', type=str, required=True, help='Input video file path')
+    parser.add_argument('--output', type=str, required=True, help='Output image file path')
+    
+    args = parser.parse_args()
+    
+    success = extract_first_frame(args.input, args.output)
+    if not success:
         sys.exit(1)
-    cv2.imwrite(output_image_path, frame)
-    cap.release()
-    print(f"First frame saved to {output_image_path}")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Extract first frame or print coordinates.")
-    parser.add_argument('--input', type=str, help='Input video file path')
-    parser.add_argument('--output', type=str, help='Output image file path')
-    parser.add_argument('--coords', type=str, help='JSON string or file path with coordinates')
-    args = parser.parse_args()
-
-    if args.input and args.output:
-        extract_first_frame(args.input, args.output)
-    elif args.coords:
-        # Accepts either a JSON string or a file path
-        try:
-            if args.coords.endswith('.json'):
-                with open(args.coords, 'r') as f:
-                    coords = json.load(f)
-            else:
-                coords = json.loads(args.coords)
-            print(f"Received coordinates: {coords}")
-        except Exception as e:
-            print(f"Failed to parse coordinates: {e}")
-            sys.exit(1)
-    else:
-        print("No valid arguments provided.")
-        sys.exit(1)
+    main()

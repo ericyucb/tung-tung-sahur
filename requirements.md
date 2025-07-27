@@ -1,0 +1,3 @@
+Use allcode.py to write inference.py
+
+After I select the points, I want the code to dispaly exactly what has been segmented on that frame using the SAM2 model. Use the code from allcode.py. When the user clicks submit or something after picking the points. Run sam2 on the frame with the points given and then show the segmented frame. Ask the user if they are fine with that if they are then move on. If not show the first frame again and allow them to reselect the first frame. 
