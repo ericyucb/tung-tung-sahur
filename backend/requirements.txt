@@ -1,6 +1,9 @@
 fastapi
+uvicorn
+python-multipart
 boto3
 python-dotenv
-uvicorn
+opencv-python
 matplotlib
-pillow 
+pillow
+numpy 
