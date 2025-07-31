@@ -43,6 +43,7 @@ async def startup_event():
     print("   POST /upload - Upload video and extract first frame")
     print("   POST /coords - Receive coordinates from frontend")
     print("   POST /segment - Run SAM2 segmentation")
+    print("   POST /process_video - Process full video with SAM2")
     print("=" * 80)
 
 app.add_middleware(
@@ -101,11 +102,12 @@ async def root():
     return {
         "message": "🚀 SAM2 AWS Processing Backend",
         "status": "UPDATED AND RUNNING",
-        "version": "2.0 - Fixed SAM2 Integration",
+        "version": "2.1 - Full Video Processing Added",
         "endpoints": {
             "upload": "POST /upload",
             "coords": "POST /coords", 
-            "segment": "POST /segment"
+            "segment": "POST /segment",
+            "process_video": "POST /process_video"
         }
     }
 
@@ -165,6 +167,67 @@ async def segment_frame(request: Request):
                 }
             else:
                 return JSONResponse(status_code=500, content={"error": "Segmentation failed"})
+                
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/process_video")
+async def process_full_video(request: Request):
+    try:
+        data = await request.json()
+        points = data.get('points', [])
+        video_filename = data.get('video_filename')
+        
+        if not points or not video_filename:
+            return JSONResponse(status_code=400, content={"error": "Missing points or video_filename"})
+        
+        # Convert points to the format expected by SAM2
+        points_np = np.array([[p['x'], p['y']] for p in points], dtype=np.float32)
+        
+        # Download video from S3 to local temp file
+        print(f"Downloading video {video_filename} from S3...")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{video_filename}") as temp_video:
+            try:
+                # Download from S3
+                s3_client.download_file(
+                    Bucket=AWS_S3_BUCKET_NAME,
+                    Key=video_filename,
+                    Filename=temp_video.name
+                )
+                video_path = temp_video.name
+                print(f"Video downloaded to: {video_path}")
+            except Exception as e:
+                return JSONResponse(status_code=404, content={"error": f"Could not download video from S3: {str(e)}"})
+        
+        # Create output video path in static directory
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        os.makedirs(static_dir, exist_ok=True)
+        output_video_filename = f'{video_filename}_masked.mp4'
+        output_video_path = os.path.join(static_dir, output_video_filename)
+        
+        try:
+            # Run full video processing
+            print(f"Starting full video processing for {video_filename}")
+            subprocess.run([
+                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                '--video', video_path,
+                '--points', json.dumps(points_np.tolist()),
+                '--video_output', output_video_path
+            ], check=True)
+            
+            if os.path.exists(output_video_path):
+                return {
+                    "message": "Full video processing completed",
+                    "masked_video_url": f"/static/{output_video_filename}"
+                }
+            else:
+                return JSONResponse(status_code=500, content={"error": "Video processing failed"})
+                
+        finally:
+            # Clean up temporary video file
+            if os.path.exists(video_path):
+                os.unlink(video_path)
+                print(f"Cleaned up temporary file: {video_path}")
                 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)}) 

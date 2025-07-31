@@ -7,14 +7,17 @@ export default function Home() {
   const [points, setPoints] = useState([]);
   const [segmentedImageUrl, setSegmentedImageUrl] = useState(null);
   const [isSegmenting, setIsSegmenting] = useState(false);
+  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
   const [videoFilename, setVideoFilename] = useState(null);
   const [imageRef, setImageRef] = useState(null);
+  const [maskedVideoUrl, setMaskedVideoUrl] = useState(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
     setFirstFrameUrl(null);
     setPoints([]);
     setSegmentedImageUrl(null);
+    setMaskedVideoUrl(null);
     setVideoFilename(null);
   };
 
@@ -125,7 +128,44 @@ export default function Home() {
   const handleReset = () => {
     setPoints([]);
     setSegmentedImageUrl(null);
+    setMaskedVideoUrl(null);
     setMessage('Points reset. Click on the image to select new points.');
+  };
+
+  const handleAcceptSegmentation = async () => {
+    if (!points.length || !videoFilename) return;
+    
+    setIsProcessingVideo(true);
+    setMessage('Processing full video with SAM2... This may take a few minutes.');
+    
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/process_video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          points: points,
+          video_filename: videoFilename 
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setMessage('Full video processing completed!');
+        // Compose absolute URL for the masked video
+        let url = data.masked_video_url;
+        if (url && !url.startsWith('http')) {
+          url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
+        }
+        setMaskedVideoUrl(url);
+      } else {
+        setMessage('Error: ' + (data.error || 'Video processing failed'));
+      }
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    } finally {
+      setIsProcessingVideo(false);
+    }
   };
 
   return (
@@ -221,10 +261,11 @@ export default function Home() {
                    </div>
                    <div className="flex gap-2">
                      <button
-                       onClick={() => setMessage('Segmentation accepted! Moving to next step...')}
-                       className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                       onClick={handleAcceptSegmentation}
+                       disabled={isProcessingVideo}
+                       className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50"
                      >
-                       Accept Segmentation
+                       {isProcessingVideo ? 'Processing Video...' : 'Accept Segmentation'}
                      </button>
                      <button
                        onClick={handleReset}
@@ -232,6 +273,25 @@ export default function Home() {
                      >
                        Try Again
                      </button>
+                   </div>
+                 </div>
+               )}
+               
+               {maskedVideoUrl && (
+                 <div className="mt-8">
+                   <h2 className="font-bold mb-2">Masked Video Result:</h2>
+                   <div className="mb-4">
+                     <video
+                       controls
+                       style={{ maxWidth: 400, borderRadius: 8 }}
+                     >
+                       <source src={maskedVideoUrl} type="video/mp4" />
+                       Your browser does not support the video tag.
+                     </video>
+                   </div>
+                   <div className="text-sm text-gray-600">
+                     <p>✅ Video processing completed! The masked video shows only the selected region.</p>
+                     <p>You can download the video by right-clicking and selecting "Save video as..."</p>
                    </div>
                  </div>
                )}
