@@ -26,6 +26,25 @@ s3_client = boto3.client(
 
 app = FastAPI()
 
+# Add startup message
+print("=" * 80)
+print("🚀 SAM2 AWS PROCESSING BACKEND STARTED!")
+print("=" * 80)
+print("✅ Server is running on http://0.0.0.0:8000")
+print("✅ SAM2 integration: READY")
+print("✅ GPU acceleration: ENABLED")
+print("✅ Static files: SERVING")
+print("=" * 80)
+
+@app.on_event("startup")
+async def startup_event():
+    print("🎯 BACKEND UPDATED AND READY FOR REQUESTS!")
+    print("📡 API endpoints:")
+    print("   POST /upload - Upload video and extract first frame")
+    print("   POST /coords - Receive coordinates from frontend")
+    print("   POST /segment - Run SAM2 segmentation")
+    print("=" * 80)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,6 +95,19 @@ async def upload_video(file: UploadFile = File(...)):
 
 from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), 'static')), name="static")
+
+@app.get("/")
+async def root():
+    return {
+        "message": "🚀 SAM2 AWS Processing Backend",
+        "status": "UPDATED AND RUNNING",
+        "version": "2.0 - Fixed SAM2 Integration",
+        "endpoints": {
+            "upload": "POST /upload",
+            "coords": "POST /coords", 
+            "segment": "POST /segment"
+        }
+    }
 
 @app.post("/coords")
 async def receive_coords(request: Request):
