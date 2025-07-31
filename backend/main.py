@@ -97,6 +97,25 @@ async def upload_video(file: UploadFile = File(...)):
 from fastapi.staticfiles import StaticFiles
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), 'static')), name="static")
 
+@app.get("/video/{filename}")
+async def serve_video(filename: str):
+    """Serve video files with proper headers for browser compatibility."""
+    static_dir = os.path.join(os.path.dirname(__file__), 'static')
+    video_path = os.path.join(static_dir, filename)
+    
+    if not os.path.exists(video_path):
+        return JSONResponse(status_code=404, content={"error": "Video not found"})
+    
+    return FileResponse(
+        video_path,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": f"inline; filename={filename}",
+            "Cache-Control": "public, max-age=3600"
+        }
+    )
+
 @app.get("/")
 async def root():
     return {
@@ -218,11 +237,11 @@ async def process_full_video(request: Request):
             if os.path.exists(output_video_path):
                 return {
                     "message": "Full video processing completed",
-                    "masked_video_url": f"/static/{output_video_filename}"
+                    "masked_video_url": f"/video/{output_video_filename}"
                 }
             else:
                 return JSONResponse(status_code=500, content={"error": "Video processing failed"})
-                
+        
         finally:
             # Clean up temporary video file
             if os.path.exists(video_path):

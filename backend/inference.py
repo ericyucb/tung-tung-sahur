@@ -251,25 +251,27 @@ def process_video_with_sam2(video_path, points, output_video_path):
                 black_img = np.zeros_like(img)
                 Image.fromarray(black_img).save(os.path.join(masked_frame_dir, fname))
         
-        # Combine into video (inspired by allcode.py)
+        # Combine into video using ffmpeg for better compatibility (inspired by allcode.py)
         print("Combining frames into video...")
         if frame_names:
-            frame_sample = cv2.imread(os.path.join(masked_frame_dir, frame_names[0]))
-            if frame_sample is not None:
-                height, width, _ = frame_sample.shape
-                out_video = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
-                
-                for fname in frame_names:
-                    fpath = os.path.join(masked_frame_dir, fname)
-                    if os.path.exists(fpath):
-                        frame = cv2.imread(fpath)
-                        if frame is not None:
-                            out_video.write(frame)
-                
-                out_video.release()
+            # Use ffmpeg to create a more compatible video
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',  # Overwrite output file
+                '-framerate', str(fps),
+                '-i', os.path.join(masked_frame_dir, '%05d.jpg'),
+                '-c:v', 'libx264',  # Use H.264 codec for better browser compatibility
+                '-preset', 'fast',
+                '-crf', '23',  # Good quality
+                '-pix_fmt', 'yuv420p',  # Standard pixel format
+                output_video_path
+            ]
+            
+            try:
+                subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
                 print(f"✅ Final masked video saved at: {output_video_path}")
-            else:
-                print("Error: Could not read sample frame")
+            except subprocess.CalledProcessError as e:
+                print(f"Error creating video with ffmpeg: {e}")
+                print(f"ffmpeg stderr: {e.stderr.decode()}")
                 return False
         else:
             print("Error: No frames found")
