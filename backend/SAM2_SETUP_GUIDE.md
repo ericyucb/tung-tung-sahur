@@ -22,8 +22,6 @@ This guide will walk you through setting up SAM2 on your EC2 instance step by st
 
 Make sure your EC2 security group allows:
 - **SSH (port 22)** - for connecting
-- **HTTP (port 80)** - for web access
-- **HTTPS (port 443)** - for secure web access
 - **Custom TCP (port 8000)** - for FastAPI backend
 
 ## Step-by-Step Setup
@@ -34,15 +32,11 @@ Make sure your EC2 security group allows:
 ssh -i your-key.pem ec2-user@your-instance-ip
 ```
 
-### Step 2: Clone Your Project
+### Step 2: Navigate to Backend Directory
 
 ```bash
-# Navigate to home directory
-cd ~
-
-# Clone your project (if not already there)
-git clone <your-repo-url> aws
-cd aws/backend
+# Navigate to backend directory
+cd /home/ec2-user/aws/backend
 ```
 
 ### Step 3: Run the Setup Script
@@ -59,9 +53,9 @@ This script will:
 - Update system packages
 - Install Python and system dependencies
 - Install CUDA (if GPU detected)
-- Create a virtual environment
+- Create a virtual environment in `/backend/venv/`
 - Install all Python dependencies
-- Clone and install SAM2
+- Clone SAM2 repository to `/backend/sam2/`
 - Download SAM2 model files
 
 ### Step 4: Configure Environment Variables
@@ -129,6 +123,24 @@ source venv/bin/activate
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+## Directory Structure After Setup
+
+```
+/home/ec2-user/aws/backend/
+├── venv/                      # Python virtual environment
+├── sam2/                      # SAM2 repository
+│   ├── checkpoints/
+│   │   └── sam2.1_hiera_tiny.pt
+│   └── configs/
+│       └── sam2.1/
+│           └── sam2.1_hiera_t.yaml
+├── main.py                    # FastAPI server
+├── inference.py               # SAM2 inference script
+├── requirements.txt           # Dependencies
+├── .env                      # Environment variables
+└── setup_ec2.sh             # Setup script
+```
+
 ## Verification Steps
 
 ### 1. Check GPU (if using GPU instance)
@@ -145,7 +157,7 @@ You should see your GPU listed with memory usage.
 source venv/bin/activate
 python3 -c "
 import sys
-sys.path.append('/opt/dlami/nvme/sam2')
+sys.path.append('./sam2')
 from sam2.build_sam import build_sam2
 print('SAM2 ready!')
 "
@@ -191,21 +203,34 @@ nvidia-smi
 #### 3. SAM2 Import Errors
 ```bash
 # Check if SAM2 is installed
-ls -la /opt/dlami/nvme/sam2/
+ls -la sam2/
 
 # Reinstall SAM2
-cd /opt/dlami/nvme/sam2
+cd sam2
 pip install -e .
 ```
 
 #### 4. Model Files Missing
 ```bash
 # Check if model files exist
-ls -la /opt/dlami/nvme/sam2/checkpoints/
-ls -la /opt/dlami/nvme/sam2/configs/sam2.1/
+ls -la sam2/checkpoints/
+ls -la sam2/configs/sam2.1/
 ```
 
 **Solution:** Re-run the model download commands from the setup script.
+
+#### 5. Space Issues
+```bash
+# Check disk usage
+df -h
+
+# Clean up space
+sudo yum clean all
+pip cache purge
+sudo rm -rf /tmp/*
+```
+
+**Solution:** The setup script includes `--no-cache-dir` flags to prevent space issues.
 
 ### Performance Optimization
 
