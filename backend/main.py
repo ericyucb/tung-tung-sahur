@@ -72,9 +72,10 @@ async def upload_video(file: UploadFile = File(...)):
             with open(local_video_path, 'wb') as f:
                 f.write(contents)
             first_frame_path = os.path.join(tmpdir, 'first_frame.jpg')
-            # Call inference.py to extract first frame
+            # Call inference.py to extract first frame using virtual environment
+            venv_python = os.path.join(os.path.dirname(__file__), 'venv', 'bin', 'python3')
             subprocess.run([
-                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                venv_python, os.path.join(os.path.dirname(__file__), 'inference.py'),
                 '--input', local_video_path,
                 '--output', first_frame_path
             ], check=True)
@@ -166,8 +167,9 @@ async def segment_frame(request: Request):
             shutil.copy(first_frame_path, temp_frame_path)
             
             # Run simple segmentation
+            venv_python = os.path.join(os.path.dirname(__file__), 'venv', 'bin', 'python3')
             subprocess.run([
-                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                venv_python, os.path.join(os.path.dirname(__file__), 'inference.py'),
                 '--frame', temp_frame_path,
                 '--points', json.dumps(points_np.tolist()),
                 '--frame_dir', frame_dir
@@ -227,8 +229,9 @@ async def process_full_video(request: Request):
         try:
             # Run full video processing
             print(f"Starting full video processing for {video_filename}")
+            venv_python = os.path.join(os.path.dirname(__file__), 'venv', 'bin', 'python3')
             subprocess.run([
-                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                venv_python, os.path.join(os.path.dirname(__file__), 'inference.py'),
                 '--video', video_path,
                 '--points', json.dumps(points_np.tolist()),
                 '--video_output', output_video_path

@@ -7,3 +7,9 @@ opencv-python
 matplotlib
 pillow
 numpy 
+torch
+dotenv
+timm
+einops
+transformers
+accelerate

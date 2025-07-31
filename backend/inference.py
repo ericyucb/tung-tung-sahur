@@ -8,15 +8,20 @@ import argparse
 import cv2
 import tempfile
 import shutil
-import torch
 import subprocess
 
-# Add SAM2 to path for imports
-sys.path.append("/opt/dlami/nvme/sam2")
-
-# SAM2 imports
-from sam2.build_sam import build_sam2, build_sam2_video_predictor
-from sam2.sam2_image_predictor import SAM2ImagePredictor
+# Conditional imports for SAM2 and torch
+try:
+    import torch
+    # Add SAM2 to path for imports
+    sys.path.append("/opt/dlami/nvme/sam2")
+    # SAM2 imports
+    from sam2.build_sam import build_sam2, build_sam2_video_predictor
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    SAM2_AVAILABLE = True
+except ImportError:
+    print("Warning: SAM2 and torch not available. Only basic frame extraction will work.")
+    SAM2_AVAILABLE = False
 
 def extract_first_frame(video_path, output_path):
     """Extract the first frame from a video file."""
@@ -55,6 +60,10 @@ def extract_first_frame(video_path, output_path):
 
 def create_sam2_segmentation(frame_path, points, output_path):
     """Create segmentation using the real SAM2 model."""
+    if not SAM2_AVAILABLE:
+        print("Error: SAM2 is not available. Cannot perform segmentation.")
+        return False
+    
     try:
         # Get the SAM2 directory
         sam2_dir = os.path.expanduser("/opt/dlami/nvme/sam2")
@@ -141,6 +150,10 @@ def create_sam2_segmentation(frame_path, points, output_path):
 
 def process_video_with_sam2(video_path, points, output_video_path):
     """Process entire video with SAM2 video predictor to create masked video."""
+    if not SAM2_AVAILABLE:
+        print("Error: SAM2 is not available. Cannot process video.")
+        return False
+    
     try:
         # Get the SAM2 directory
         sam2_dir = os.path.expanduser("/opt/dlami/nvme/sam2")
