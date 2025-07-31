@@ -9,17 +9,14 @@ echo "🚀 Setting up SAM2 environment on EC2..."
 sudo yum update -y
 
 # Install system dependencies
-sudo yum install -y python3 python3-pip git wget unzip ffmpeg
+sudo yum install -y python3 python3-pip git wget unzip
 
 # Install CUDA dependencies (for GPU instances)
-if command -v nvidia-smi &> /dev/null; then
-    echo "🎮 GPU detected, installing CUDA dependencies..."
+
     # Install CUDA toolkit if not already installed
     # Note: This might need to be adjusted based on your AMI
-    sudo yum install -y cuda-toolkit
-else
-    echo "⚠️  No GPU detected, will use CPU-only mode"
-fi
+sudo yum install -y cuda-toolkit
+
 
 # Create virtual environment
 python3 -m venv venv
@@ -42,12 +39,9 @@ pip install accelerate
 
 # Clone SAM2 repository
 echo "📥 Cloning SAM2 repository..."
-cd /opt
-sudo mkdir -p dlami/nvme
-sudo chown $USER:$USER dlami/nvme
-cd dlami/nvme
 git clone https://github.com/facebookresearch/sam2.git
 cd sam2
+pip install -e .
 
 # Install SAM2
 echo "📦 Installing SAM2..."

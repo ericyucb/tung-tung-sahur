@@ -13,3 +13,5 @@ timm
 einops
 transformers
 accelerate
+torchvision
+
