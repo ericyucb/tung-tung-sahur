@@ -13,6 +13,7 @@ export default function Home() {
   const [maskedVideoUrl, setMaskedVideoUrl] = useState(null);
   const [isRunningOpenPose, setIsRunningOpenPose] = useState(false);
   const [landmarkedVideoUrl, setLandmarkedVideoUrl] = useState(null);
+  const [maskedVideoFilename, setMaskedVideoFilename] = useState(null); // Store this from backend response
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -22,6 +23,7 @@ export default function Home() {
     setMaskedVideoUrl(null);
     setLandmarkedVideoUrl(null);
     setVideoFilename(null);
+    setMaskedVideoFilename(null);
   };
 
   const handleSubmit = async (e) => {
@@ -133,6 +135,7 @@ export default function Home() {
     setSegmentedImageUrl(null);
     setMaskedVideoUrl(null);
     setLandmarkedVideoUrl(null);
+    setMaskedVideoFilename(null);
     setMessage('Points reset. Click on the image to select new points.');
   };
 
@@ -156,6 +159,13 @@ export default function Home() {
       
       if (res.ok) {
         setMessage('Full video processing completed!');
+        
+        // Store the masked video filename from the backend response
+        if (data.masked_video_filename) {
+          setMaskedVideoFilename(data.masked_video_filename);
+          console.log('Masked video filename from backend:', data.masked_video_filename);
+        }
+        
         // Compose absolute URL for the masked video
         let url = data.masked_video_url;
         if (url && !url.startsWith('http')) {
@@ -173,20 +183,22 @@ export default function Home() {
   };
 
   const handleRunOpenPose = async () => {
-    if (!maskedVideoUrl || !videoFilename) return;
+    if (!maskedVideoUrl || !maskedVideoFilename) {
+      setMessage('Error: No masked video filename available');
+      return;
+    }
     
     setIsRunningOpenPose(true);
     setMessage('Running OpenPose on masked video... This may take a few minutes.');
     
     try {
-      // Extract the masked video filename from the URL
-      const maskedVideoFilename = videoFilename.replace(/\.[^/.]+$/, '_masked.mp4');
+      console.log('Sending masked video filename to backend:', maskedVideoFilename);
       
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/run_openpose_on_masked_video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          masked_video_filename: maskedVideoFilename
+          masked_video_filename: maskedVideoFilename // Use the filename from backend response
         }),
       });
       
@@ -202,9 +214,11 @@ export default function Home() {
         setLandmarkedVideoUrl(url);
       } else {
         setMessage('Error: ' + (data.error || 'OpenPose processing failed'));
+        console.error('Backend error:', data);
       }
     } catch (err) {
       setMessage('Error: ' + err.message);
+      console.error('Request error:', err);
     } finally {
       setIsRunningOpenPose(false);
     }
@@ -338,11 +352,14 @@ export default function Home() {
                    <div className="mt-4">
                      <button
                        onClick={handleRunOpenPose}
-                       disabled={isRunningOpenPose}
+                       disabled={isRunningOpenPose || !maskedVideoFilename}
                        className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 disabled:opacity-50"
                      >
                        {isRunningOpenPose ? 'Running OpenPose...' : 'Add OpenPose Landmarks'}
                      </button>
+                     {!maskedVideoFilename && (
+                       <p className="text-red-500 text-sm mt-2">Error: No masked video filename available</p>
+                     )}
                    </div>
                  </div>
         )}
@@ -368,4 +385,4 @@ export default function Home() {
       </div>
     </div>
   );
-} 
+}
