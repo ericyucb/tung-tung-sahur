@@ -13,7 +13,8 @@ export default function Home() {
   const [maskedVideoUrl, setMaskedVideoUrl] = useState(null);
   const [isRunningOpenPose, setIsRunningOpenPose] = useState(false);
   const [landmarkedVideoUrl, setLandmarkedVideoUrl] = useState(null);
-  const [maskedVideoFilename, setMaskedVideoFilename] = useState(null); // Store this from backend response
+  const [maskedVideoFilename, setMaskedVideoFilename] = useState(null);
+  const [currentStep, setCurrentStep] = useState(0);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -24,6 +25,7 @@ export default function Home() {
     setLandmarkedVideoUrl(null);
     setVideoFilename(null);
     setMaskedVideoFilename(null);
+    setCurrentStep(0);
   };
 
   const handleSubmit = async (e) => {
@@ -31,7 +33,7 @@ export default function Home() {
     if (!file) return;
     const formData = new FormData();
     formData.append('file', file);
-    setMessage('Uploading...');
+    setMessage('Uploading video...');
     setFirstFrameUrl(null);
     setPoints([]);
     try {
@@ -41,17 +43,16 @@ export default function Home() {
       });
       const data = await res.json();
       if (res.ok) {
-               setMessage('Upload successful: ' + data.video_filename);
-               setVideoFilename(data.video_filename);
-               // Compose absolute URL for the first frame
-               let url = data.first_frame_url;
-               if (url && !url.startsWith('http')) {
-                 // Assume backend and frontend are on same host for dev
-                 url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
-               }
-               setFirstFrameUrl(url);
+        setMessage('Upload successful. Please select points on the image below.');
+        setVideoFilename(data.video_filename);
+        let url = data.first_frame_url;
+        if (url && !url.startsWith('http')) {
+          url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
+        }
+        setFirstFrameUrl(url);
+        setCurrentStep(1);
       } else {
-        setMessage('Error: ' + (data.error || 'Unknown error'));
+        setMessage('Error: ' + (data.error || 'Upload failed'));
       }
     } catch (err) {
       setMessage('Error: ' + err.message);
@@ -63,26 +64,20 @@ export default function Home() {
     const rect = e.target.getBoundingClientRect();
     const img = e.target;
     
-    // Get the actual displayed dimensions
     const displayWidth = img.offsetWidth;
     const displayHeight = img.offsetHeight;
-    
-    // Get the natural (original) dimensions
     const naturalWidth = img.naturalWidth;
     const naturalHeight = img.naturalHeight;
     
-    // Calculate the click position relative to the displayed image
     const displayX = Math.round(e.nativeEvent.clientX - rect.left);
     const displayY = Math.round(e.nativeEvent.clientY - rect.top);
     
-    // Scale the coordinates to match the original image dimensions
     const originalX = Math.round((displayX / displayWidth) * naturalWidth);
     const originalY = Math.round((displayY / displayHeight) * naturalHeight);
     
     const newPoints = [...points, { x: originalX, y: originalY }];
     setPoints(newPoints);
     
-    // Send to backend
     try {
       await fetch(`${process.env.NEXT_PUBLIC_API_URL}/coords`, {
         method: 'POST',
@@ -113,13 +108,13 @@ export default function Home() {
       const data = await res.json();
       
       if (res.ok) {
-        setMessage('Segmentation completed!');
-        // Compose absolute URL for the segmented image
+        setMessage('Segmentation completed. Review the result below.');
         let url = data.segmented_image_url;
         if (url && !url.startsWith('http')) {
           url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
         }
         setSegmentedImageUrl(url);
+        setCurrentStep(2);
       } else {
         setMessage('Error: ' + (data.error || 'Segmentation failed'));
       }
@@ -137,6 +132,7 @@ export default function Home() {
     setLandmarkedVideoUrl(null);
     setMaskedVideoFilename(null);
     setMessage('Points reset. Click on the image to select new points.');
+    setCurrentStep(1);
   };
 
   const handleAcceptSegmentation = async () => {
@@ -158,20 +154,18 @@ export default function Home() {
       const data = await res.json();
       
       if (res.ok) {
-        setMessage('Full video processing completed!');
+        setMessage('Full video processing completed.');
         
-        // Store the masked video filename from the backend response
         if (data.masked_video_filename) {
           setMaskedVideoFilename(data.masked_video_filename);
-          console.log('Masked video filename from backend:', data.masked_video_filename);
         }
         
-        // Compose absolute URL for the masked video
         let url = data.masked_video_url;
         if (url && !url.startsWith('http')) {
           url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
         }
         setMaskedVideoUrl(url);
+        setCurrentStep(3);
       } else {
         setMessage('Error: ' + (data.error || 'Video processing failed'));
       }
@@ -184,7 +178,7 @@ export default function Home() {
 
   const handleRunOpenPose = async () => {
     if (!maskedVideoUrl || !maskedVideoFilename) {
-      setMessage('Error: No masked video filename available');
+      setMessage('Error: No masked video available');
       return;
     }
     
@@ -192,196 +186,266 @@ export default function Home() {
     setMessage('Running OpenPose on masked video... This may take a few minutes.');
     
     try {
-      console.log('Sending masked video filename to backend:', maskedVideoFilename);
-      
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/run_openpose_on_masked_video`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          masked_video_filename: maskedVideoFilename // Use the filename from backend response
+          masked_video_filename: maskedVideoFilename
         }),
       });
       
       const data = await res.json();
       
       if (res.ok) {
-        setMessage('OpenPose processing completed!');
-        // Compose absolute URL for the landmarked video
+        setMessage('OpenPose processing completed.');
         let url = data.landmarked_video_url;
         if (url && !url.startsWith('http')) {
           url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
         }
         setLandmarkedVideoUrl(url);
+        setCurrentStep(4);
       } else {
         setMessage('Error: ' + (data.error || 'OpenPose processing failed'));
-        console.error('Backend error:', data);
       }
     } catch (err) {
       setMessage('Error: ' + err.message);
-      console.error('Request error:', err);
     } finally {
       setIsRunningOpenPose(false);
     }
   };
 
+  const steps = [
+    { title: 'Upload Video', active: currentStep >= 0 },
+    { title: 'Select Points', active: currentStep >= 1 },
+    { title: 'Segment', active: currentStep >= 2 },
+    { title: 'Process Video', active: currentStep >= 3 },
+    { title: 'Add Landmarks', active: currentStep >= 4 }
+  ];
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-100 flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-2xl p-10 max-w-md w-full text-center">
-        <h1 className="font-extrabold text-3xl mb-6 tracking-tight text-slate-800">Upload a Video</h1>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-          <input
-            type="file"
-            accept="video/*"
-            onChange={handleFileChange}
-            className="file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 border border-slate-200 rounded-lg bg-slate-50 text-base cursor-pointer"
-          />
-          <button
-            type="submit"
-            className="bg-gradient-to-r from-indigo-500 to-blue-400 text-white font-bold text-lg rounded-lg py-3 shadow-md hover:from-indigo-600 hover:to-blue-500 transition-colors duration-200"
-            disabled={message === 'Uploading...'}
-          >
-            {message === 'Uploading...' ? 'Uploading...' : 'Upload'}
-          </button>
-        </form>
-        {message && (
-          <p className={`mt-6 font-medium ${message.startsWith('Upload successful') ? 'text-green-600' : 'text-red-600'}`}>
-            {message}
+    <div className="min-h-screen bg-gray-50">
+      <div className="container mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-gray-900 mb-4">
+            Gait Analysis System
+          </h1>
+          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+            Upload a video, select points on the patient, and generate masked videos with pose landmarks for gait analysis
           </p>
-        )}
-        {firstFrameUrl && (
-          <div className="mt-8">
-            <h2 className="font-bold mb-2">First Frame (click to select points):</h2>
-            <div style={{ position: 'relative', display: 'inline-block' }}>
-              <img
-                ref={setImageRef}
-                src={firstFrameUrl}
-                alt="First frame"
-                style={{ maxWidth: 400, borderRadius: 8, cursor: 'crosshair' }}
-                onClick={handleImageClick}
-              />
-              {/* Draw points as red dots */}
-              <svg
-                style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
-                width="100%"
-                height="100%"
-                preserveAspectRatio="none"
-              >
-                {points.map((pt, idx) => {
-                  // Scale the original coordinates back to displayed size for visualization
-                  if (!imageRef) return null;
-                  const displayX = (pt.x / imageRef.naturalWidth) * imageRef.offsetWidth;
-                  const displayY = (pt.y / imageRef.naturalHeight) * imageRef.offsetHeight;
-                  return (
-                    <circle key={idx} cx={displayX} cy={displayY} r={5} fill="red" />
-                  );
-                })}
-              </svg>
-            </div>
-                               <div className="mt-4 text-left">
-                     <h3 className="font-semibold">Selected Points:</h3>
-                     <ul className="text-sm">
-                       {points.map((pt, idx) => (
-                         <li key={idx}>({pt.x}, {pt.y})</li>
-                       ))}
-                     </ul>
-                     {points.length > 0 && (
-                       <div className="mt-4 flex gap-2">
-                         <button
-                           onClick={handleSegment}
-                           disabled={isSegmenting}
-                           className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:opacity-50"
-                         >
-                           {isSegmenting ? 'Segmenting...' : 'Run SAM2 Segmentation'}
-                         </button>
-                         <button
-                           onClick={handleReset}
-                           className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
-                         >
-                           Reset Points
-                         </button>
-                       </div>
-                     )}
-                   </div>
-                 </div>
-               )}
-               
-               {segmentedImageUrl && (
-                 <div className="mt-8">
-                   <h2 className="font-bold mb-2">SAM2 Segmentation Result:</h2>
-                   <div className="mb-4">
-                     <img
-                       src={segmentedImageUrl}
-                       alt="Segmented frame"
-                       style={{ maxWidth: 400, borderRadius: 8 }}
-                     />
-                   </div>
-                   <div className="flex gap-2">
-                     <button
-                       onClick={handleAcceptSegmentation}
-                       disabled={isProcessingVideo}
-                       className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:opacity-50"
-                     >
-                       {isProcessingVideo ? 'Processing Video...' : 'Accept Segmentation'}
-                     </button>
-                     <button
-                       onClick={handleReset}
-                       className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-                     >
-                       Try Again
-                     </button>
-                   </div>
-                 </div>
-               )}
-               
-               {maskedVideoUrl && (
-                 <div className="mt-8">
-                   <h2 className="font-bold mb-2">Masked Video Result:</h2>
-                   <div className="mb-4">
-                     <video
-                       controls
-                       style={{ maxWidth: 400, borderRadius: 8 }}
-                     >
-                       <source src={maskedVideoUrl} type="video/mp4" />
-                       Your browser does not support the video tag.
-                     </video>
-                   </div>
-                   <div className="text-sm text-gray-600">
-                     <p>✅ Video processing completed! The masked video shows only the selected region.</p>
-                     <p>You can download the video by right-clicking and selecting "Save video as..."</p>
-                   </div>
-                   <div className="mt-4">
-                     <button
-                       onClick={handleRunOpenPose}
-                       disabled={isRunningOpenPose || !maskedVideoFilename}
-                       className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 disabled:opacity-50"
-                     >
-                       {isRunningOpenPose ? 'Running OpenPose...' : 'Add OpenPose Landmarks'}
-                     </button>
-                     {!maskedVideoFilename && (
-                       <p className="text-red-500 text-sm mt-2">Error: No masked video filename available</p>
-                     )}
-                   </div>
-                 </div>
-        )}
-        
-        {landmarkedVideoUrl && (
-          <div className="mt-8">
-            <h2 className="font-bold mb-2">Video with OpenPose Landmarks:</h2>
-            <div className="mb-4">
-              <video
-                controls
-                style={{ maxWidth: 400, borderRadius: 8 }}
-              >
-                <source src={landmarkedVideoUrl} type="video/mp4" />
-                Your browser does not support the video tag.
-              </video>
-            </div>
-            <div className="text-sm text-gray-600">
-              <p>✅ OpenPose processing completed! The video now shows pose landmarks.</p>
-              <p>You can download the video by right-clicking and selecting "Save video as..."</p>
-            </div>
+        </div>
+
+        {/* Progress Steps */}
+        <div className="flex justify-center mb-8">
+          <div className="flex space-x-4">
+            {steps.map((step, index) => (
+              <div key={index} className="flex items-center">
+                <div className={`flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+                  step.active 
+                    ? 'bg-blue-600 text-white border-transparent' 
+                    : 'bg-white text-gray-400 border-gray-300'
+                }`}>
+                  <span className="text-sm font-medium">{index + 1}</span>
+                </div>
+                {index < steps.length - 1 && (
+                  <div className={`w-12 h-0.5 mx-2 ${step.active ? 'bg-blue-600' : 'bg-gray-300'}`} />
+                )}
+              </div>
+            ))}
           </div>
-        )}
+        </div>
+
+        {/* Main Content */}
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            {/* Upload Section */}
+            <div className="mb-8">
+              <h2 className="text-2xl font-semibold text-gray-900 mb-4">Upload Video</h2>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
+                  <input
+                    type="file"
+                    accept="video/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                    id="file-upload"
+                  />
+                  <label htmlFor="file-upload" className="cursor-pointer">
+                    <div className="text-4xl mb-4 text-gray-400">📹</div>
+                    <p className="text-lg font-medium text-gray-700 mb-2">
+                      {file ? file.name : 'Choose a video file'}
+                    </p>
+                    <p className="text-gray-500">MP4, MOV, AVI, or other video formats</p>
+                  </label>
+                </div>
+                <button
+                  type="submit"
+                  disabled={!file || message === 'Uploading...'}
+                  className="w-full bg-blue-600 text-white font-semibold text-lg rounded-lg py-3 shadow-sm hover:bg-blue-700 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {message === 'Uploading...' ? 'Uploading...' : 'Upload Video'}
+                </button>
+              </form>
+            </div>
+
+            {/* Status Message */}
+            {message && (
+              <div className={`mb-6 p-4 rounded-lg ${
+                message.includes('Error') ? 'bg-red-50 text-red-800 border border-red-200' :
+                message.includes('completed') ? 'bg-green-50 text-green-800 border border-green-200' :
+                'bg-blue-50 text-blue-800 border border-blue-200'
+              }`}>
+                <p className="font-medium">{message}</p>
+              </div>
+            )}
+
+            {/* First Frame Section */}
+            {firstFrameUrl && (
+              <div className="mb-8">
+                <h2 className="text-2xl font-semibold text-gray-900 mb-4">Select Points</h2>
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <p className="text-gray-600 mb-4">Click on a few points on the patient for segmentation:</p>
+                  <div className="relative inline-block">
+                    <img
+                      ref={setImageRef}
+                      src={firstFrameUrl}
+                      alt="First frame"
+                      className="max-w-full h-auto rounded-lg cursor-crosshair border border-gray-300 hover:border-blue-400 transition-colors"
+                      onClick={handleImageClick}
+                    />
+                    <svg
+                      className="absolute top-0 left-0 pointer-events-none"
+                      width="100%"
+                      height="100%"
+                      preserveAspectRatio="none"
+                    >
+                      {points.map((pt, idx) => {
+                        if (!imageRef) return null;
+                        const displayX = (pt.x / imageRef.naturalWidth) * imageRef.offsetWidth;
+                        const displayY = (pt.y / imageRef.naturalHeight) * imageRef.offsetHeight;
+                        return (
+                          <circle key={idx} cx={displayX} cy={displayY} r="6" fill="#dc2626" stroke="white" strokeWidth="2" />
+                        );
+                      })}
+                    </svg>
+                  </div>
+                  
+                  {points.length > 0 && (
+                    <div className="mt-6 space-y-4">
+                      <div className="bg-white rounded-lg p-4 border border-gray-200">
+                        <h3 className="font-semibold text-gray-900 mb-2">Selected Points ({points.length}):</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                          {points.map((pt, idx) => (
+                            <div key={idx} className="text-sm bg-gray-100 rounded px-2 py-1">
+                              Point {idx + 1}: ({pt.x}, {pt.y})
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-3">
+                        <button
+                          onClick={handleSegment}
+                          disabled={isSegmenting}
+                          className="flex-1 bg-green-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                        >
+                          {isSegmenting ? 'Segmenting...' : 'Run SAM2 Segmentation'}
+                        </button>
+                        <button
+                          onClick={handleReset}
+                          className="bg-gray-500 text-white font-semibold py-3 px-6 rounded-lg hover:bg-gray-600 transition-colors"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Segmentation Result */}
+            {segmentedImageUrl && (
+              <div className="mb-8">
+                <h2 className="text-2xl font-semibold text-gray-900 mb-4">Segmentation Result</h2>
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <img
+                    src={segmentedImageUrl}
+                    alt="Segmented frame"
+                    className="max-w-full h-auto rounded-lg border border-gray-200"
+                  />
+                  <div className="mt-6 flex gap-3">
+                    <button
+                      onClick={handleAcceptSegmentation}
+                      disabled={isProcessingVideo}
+                      className="flex-1 bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    >
+                      {isProcessingVideo ? 'Processing...' : 'Process Full Video'}
+                    </button>
+                    <button
+                      onClick={handleReset}
+                      className="bg-red-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-red-700 transition-colors"
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Masked Video Result */}
+            {maskedVideoUrl && (
+              <div className="mb-8">
+                <h2 className="text-2xl font-semibold text-gray-900 mb-4">Masked Video</h2>
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <video
+                    controls
+                    className="w-full rounded-lg border border-gray-200"
+                  >
+                    <source src={maskedVideoUrl} type="video/mp4" />
+                    Your browser does not support the video tag.
+                  </video>
+                  <div className="mt-4 p-4 bg-green-50 rounded-lg border border-green-200">
+                    <p className="text-green-800 font-medium">Video processing completed</p>
+                    <p className="text-green-700 text-sm mt-1">The masked video shows only the selected anatomical region.</p>
+                  </div>
+                  <div className="mt-6">
+                    <button
+                      onClick={handleRunOpenPose}
+                      disabled={isRunningOpenPose || !maskedVideoFilename}
+                      className="w-full bg-indigo-600 text-white font-semibold py-3 px-6 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                    >
+                      {isRunningOpenPose ? 'Running OpenPose...' : 'Add Pose Landmarks'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Final Video with Landmarks */}
+            {landmarkedVideoUrl && (
+              <div className="mb-8">
+                <h2 className="text-2xl font-semibold text-gray-900 mb-4">Video with Pose Landmarks</h2>
+                <div className="bg-gray-50 rounded-lg p-6">
+                  <video
+                    controls
+                    className="w-full rounded-lg border border-gray-200"
+                  >
+                    <source src={landmarkedVideoUrl} type="video/mp4" />
+                    Your browser does not support the video tag.
+                  </video>
+                  <div className="mt-4 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+                    <p className="text-indigo-800 font-medium">OpenPose processing completed</p>
+                    <p className="text-indigo-700 text-sm mt-1">The video now shows pose landmarks overlaid on the masked region for gait analysis.</p>
+                  </div>
+                  <div className="mt-4 text-center">
+                    <p className="text-gray-600 text-sm">Right-click the video and select "Save video as..." to download</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
