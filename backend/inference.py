@@ -12,7 +12,7 @@ import torch
 import subprocess
 
 # Add SAM2 to path for imports
-sys.path.append("/opt/dlami/nvme/sam2")
+sys.path.append(os.path.expanduser("~/models/sam2"))
 
 # SAM2 imports
 from sam2.build_sam import build_sam2, build_sam2_video_predictor
@@ -57,7 +57,7 @@ def create_sam2_segmentation(frame_path, points, output_path):
     """Create segmentation using the real SAM2 model."""
     try:
         # Get the SAM2 directory
-        sam2_dir = os.path.expanduser("/opt/dlami/nvme/sam2")
+        sam2_dir = os.path.expanduser("~/models/sam2")
         
         # Store current directory
         original_dir = os.getcwd()
@@ -87,7 +87,6 @@ def create_sam2_segmentation(frame_path, points, output_path):
         print(f"Labels: {labels}")
         
         # Load image with OpenCV and set it in predictor
-        import cv2
         img = cv2.imread(frame_path)
         if img is None:
             raise ValueError(f"Could not load image: {frame_path}")
@@ -140,10 +139,10 @@ def create_sam2_segmentation(frame_path, points, output_path):
         os.chdir(original_dir)
 
 def process_video_with_sam2(video_path, points, output_video_path):
-    """Process entire video with SAM2 video predictor to create masked video."""
+    """Process entire video with SAM2 video predictor to create masked video with OpenPose landmarks."""
     try:
         # Get the SAM2 directory
-        sam2_dir = os.path.expanduser("/opt/dlami/nvme/sam2")
+        sam2_dir = os.path.expanduser("~/models/sam2")
         
         # Store current directory
         original_dir = os.getcwd()
@@ -251,8 +250,8 @@ def process_video_with_sam2(video_path, points, output_video_path):
                 black_img = np.zeros_like(img)
                 Image.fromarray(black_img).save(os.path.join(masked_frame_dir, fname))
         
-        # Combine into video using ffmpeg for better compatibility (inspired by allcode.py)
-        print("Combining frames into video...")
+        # Combine masked frames into video using ffmpeg
+        print("Combining masked frames into video...")
         if frame_names:
             # Use ffmpeg to create a more compatible video
             ffmpeg_cmd = [
@@ -293,6 +292,115 @@ def process_video_with_sam2(video_path, points, output_video_path):
         # Ensure we change back to original directory
         os.chdir(original_dir)
 
+def run_openpose_on_masked_frames(masked_frame_dir, output_json_dir, output_video_path):
+    """Run OpenPose on masked frames to create video with landmarks."""
+    try:
+        print(f"Running OpenPose on masked frames in: {masked_frame_dir}")
+        print(f"JSON output directory: {output_json_dir}")
+        print(f"Video output path: {output_video_path}")
+        
+        # Create output directories
+        os.makedirs(output_json_dir, exist_ok=True)
+        
+        # Import subprocess at the top of the function
+        import subprocess
+        
+        # Add OpenPose Python module to path
+        openpose_path = os.path.expanduser("~/models/openpose/build/python")
+        sys.path.append(openpose_path)
+        sys.path.append(os.path.join(openpose_path, "openpose"))
+        
+        # Import OpenPose Python module
+        try:
+            import pyopenpose as op
+        except ImportError:
+            # Try alternative import path
+            sys.path.append(os.path.expanduser("~/models/openpose/build/python/openpose"))
+            import pyopenpose as op
+        
+        # Configure OpenPose - only write JSON, not video
+        params = dict()
+        params["model_folder"] = os.path.expanduser("~/models/openpose/models/")
+        params["number_people_max"] = 1
+        params["net_resolution"] = "-1x368"
+        params["write_json"] = output_json_dir
+        params["display"] = 0
+        
+        # Initialize OpenPose
+        opWrapper = op.WrapperPython()
+        opWrapper.configure(params)
+        opWrapper.start()
+        
+        # Process frames and collect results
+        frame_files = sorted([f for f in os.listdir(masked_frame_dir) if f.lower().endswith(('.jpg', '.png'))])
+        processed_frames = []
+        
+        for frame_file in frame_files:
+            frame_path = os.path.join(masked_frame_dir, frame_file)
+            datum = op.Datum()
+            imageToProcess = cv2.imread(frame_path)
+            datum.cvInputData = imageToProcess
+            opWrapper.emplaceAndPop(op.VectorDatum([datum]))
+            
+            # Get the processed image with landmarks
+            if datum.cvOutputData is not None:
+                processed_frames.append(datum.cvOutputData)
+            else:
+                # If no landmarks detected, use original frame
+                processed_frames.append(imageToProcess)
+        
+        # Create video from processed frames using ffmpeg
+        if processed_frames:
+            # Save processed frames temporarily
+            temp_frame_dir = f"/tmp/openpose_processed_frames_{os.getpid()}"
+            os.makedirs(temp_frame_dir, exist_ok=True)
+            
+            for i, frame in enumerate(processed_frames):
+                frame_path = os.path.join(temp_frame_dir, f"{i:05d}.jpg")
+                cv2.imwrite(frame_path, frame)
+            
+            # Use ffmpeg to create video
+            subprocess.run([
+                'ffmpeg', '-y',
+                '-framerate', '30',
+                '-i', os.path.join(temp_frame_dir, '%05d.jpg'),
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                output_video_path
+            ], check=True)
+            
+            # Clean up temp frames
+            shutil.rmtree(temp_frame_dir, ignore_errors=True)
+            
+            print("✅ OpenPose processing complete!")
+            return True
+        else:
+            print("❌ No frames were processed")
+            return False
+            
+    except ImportError as e:
+        print(f"OpenPose import error: {e}")
+        print("Trying to install OpenPose Python module...")
+        try:
+            # Try to build the Python module if it's missing
+            import subprocess
+            subprocess.run([
+                'cd', os.path.expanduser("~/models/openpose/build/python"),
+                '&&', 'make', 'pyopenpose'
+            ], check=True, shell=True)
+            # Try import again
+            import pyopenpose as op
+        except Exception as build_error:
+            print(f"Failed to build OpenPose Python module: {build_error}")
+            return False
+    except Exception as e:
+        print(f"Error running OpenPose: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description='SAM2 Video Processing')
     parser.add_argument('--input', type=str, help='Input video file path')
@@ -302,6 +410,7 @@ def main():
     parser.add_argument('--frame_dir', type=str, help='Frame directory for output')
     parser.add_argument('--video', type=str, help='Input video file path for full video processing')
     parser.add_argument('--video_output', type=str, help='Output video file path for masked video')
+    parser.add_argument('--openpose', type=str, help='Run OpenPose on masked video file')
     
     args = parser.parse_args()
     
@@ -328,11 +437,50 @@ def main():
         if not success:
             sys.exit(1)
     
+    # OpenPose mode
+    elif args.openpose:
+        masked_video_path = args.openpose
+        if not os.path.exists(masked_video_path):
+            print(f"Error: Masked video not found: {masked_video_path}")
+            sys.exit(1)
+        
+        # Create output paths
+        output_video_path = masked_video_path.replace('.mp4', '_with_landmarks.mp4')
+        
+        # Extract frames from masked video
+        video_id = os.path.splitext(os.path.basename(masked_video_path))[0]
+        frame_dir = f"/tmp/{video_id}_masked_frames"
+        os.makedirs(frame_dir, exist_ok=True)
+        
+        # Extract frames using ffmpeg
+        subprocess.run([
+            'ffmpeg', '-i', masked_video_path, 
+            '-vf', 'fps=30',
+            '-frame_pts', '1',
+            os.path.join(frame_dir, '%05d.jpg')
+        ], check=True)
+        
+        # Run OpenPose on masked frames
+        openpose_json_dir = f"/tmp/{video_id}_openpose_json"
+        
+        openpose_success = run_openpose_on_masked_frames(
+            frame_dir, 
+            openpose_json_dir, 
+            output_video_path
+        )
+        
+        if openpose_success:
+            print(f"✅ OpenPose processing completed: {output_video_path}")
+        else:
+            print("❌ OpenPose processing failed")
+            sys.exit(1)
+    
     else:
         print("Usage:")
         print("  For frame extraction: --input <video> --output <frame>")
         print("  For segmentation: --frame <frame> --points <json> --frame_dir <dir>")
         print("  For full video processing: --video <video> --points <json> --video_output <output>")
+        print("  For OpenPose processing: --openpose <masked_video_path>")
         sys.exit(1)
 
 if __name__ == "__main__":

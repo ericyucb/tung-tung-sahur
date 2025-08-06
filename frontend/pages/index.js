@@ -11,6 +11,8 @@ export default function Home() {
   const [videoFilename, setVideoFilename] = useState(null);
   const [imageRef, setImageRef] = useState(null);
   const [maskedVideoUrl, setMaskedVideoUrl] = useState(null);
+  const [isRunningOpenPose, setIsRunningOpenPose] = useState(false);
+  const [landmarkedVideoUrl, setLandmarkedVideoUrl] = useState(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -18,6 +20,7 @@ export default function Home() {
     setPoints([]);
     setSegmentedImageUrl(null);
     setMaskedVideoUrl(null);
+    setLandmarkedVideoUrl(null);
     setVideoFilename(null);
   };
 
@@ -35,7 +38,7 @@ export default function Home() {
         body: formData,
       });
       const data = await res.json();
-                   if (res.ok) {
+      if (res.ok) {
                setMessage('Upload successful: ' + data.video_filename);
                setVideoFilename(data.video_filename);
                // Compose absolute URL for the first frame
@@ -45,7 +48,7 @@ export default function Home() {
                  url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
                }
                setFirstFrameUrl(url);
-             } else {
+      } else {
         setMessage('Error: ' + (data.error || 'Unknown error'));
       }
     } catch (err) {
@@ -129,6 +132,7 @@ export default function Home() {
     setPoints([]);
     setSegmentedImageUrl(null);
     setMaskedVideoUrl(null);
+    setLandmarkedVideoUrl(null);
     setMessage('Points reset. Click on the image to select new points.');
   };
 
@@ -165,6 +169,44 @@ export default function Home() {
       setMessage('Error: ' + err.message);
     } finally {
       setIsProcessingVideo(false);
+    }
+  };
+
+  const handleRunOpenPose = async () => {
+    if (!maskedVideoUrl || !videoFilename) return;
+    
+    setIsRunningOpenPose(true);
+    setMessage('Running OpenPose on masked video... This may take a few minutes.');
+    
+    try {
+      // Extract the masked video filename from the URL
+      const maskedVideoFilename = videoFilename.replace(/\.[^/.]+$/, '_masked.mp4');
+      
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/run_openpose_on_masked_video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          masked_video_filename: maskedVideoFilename
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setMessage('OpenPose processing completed!');
+        // Compose absolute URL for the landmarked video
+        let url = data.landmarked_video_url;
+        if (url && !url.startsWith('http')) {
+          url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
+        }
+        setLandmarkedVideoUrl(url);
+      } else {
+        setMessage('Error: ' + (data.error || 'OpenPose processing failed'));
+      }
+    } catch (err) {
+      setMessage('Error: ' + err.message);
+    } finally {
+      setIsRunningOpenPose(false);
     }
   };
 
@@ -293,8 +335,36 @@ export default function Home() {
                      <p>✅ Video processing completed! The masked video shows only the selected region.</p>
                      <p>You can download the video by right-clicking and selecting "Save video as..."</p>
                    </div>
+                   <div className="mt-4">
+                     <button
+                       onClick={handleRunOpenPose}
+                       disabled={isRunningOpenPose}
+                       className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 disabled:opacity-50"
+                     >
+                       {isRunningOpenPose ? 'Running OpenPose...' : 'Add OpenPose Landmarks'}
+                     </button>
+                   </div>
                  </div>
-               )}
+        )}
+        
+        {landmarkedVideoUrl && (
+          <div className="mt-8">
+            <h2 className="font-bold mb-2">Video with OpenPose Landmarks:</h2>
+            <div className="mb-4">
+              <video
+                controls
+                style={{ maxWidth: 400, borderRadius: 8 }}
+              >
+                <source src={landmarkedVideoUrl} type="video/mp4" />
+                Your browser does not support the video tag.
+              </video>
+            </div>
+            <div className="text-sm text-gray-600">
+              <p>✅ OpenPose processing completed! The video now shows pose landmarks.</p>
+              <p>You can download the video by right-clicking and selecting "Save video as..."</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

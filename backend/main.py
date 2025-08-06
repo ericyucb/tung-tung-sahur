@@ -24,27 +24,33 @@ s3_client = boto3.client(
     region_name=AWS_REGION
 )
 
-app = FastAPI()
+from contextlib import asynccontextmanager
 
-# Add startup message
-print("=" * 80)
-print("🚀 SAM2 AWS PROCESSING BACKEND STARTED!")
-print("=" * 80)
-print("✅ Server is running on http://0.0.0.0:8000")
-print("✅ SAM2 integration: READY")
-print("✅ GPU acceleration: ENABLED")
-print("✅ Static files: SERVING")
-print("=" * 80)
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("=" * 80)
+    print("🚀 SAM2 AWS PROCESSING BACKEND STARTED!")
+    print("=" * 80)
+    print("✅ Server is running on http://0.0.0.0:8000")
+    print("✅ SAM2 integration: READY")
+    print("✅ GPU acceleration: ENABLED")
+    print("✅ Static files: SERVING")
+    print("=" * 80)
     print("🎯 BACKEND UPDATED AND READY FOR REQUESTS!")
     print("📡 API endpoints:")
     print("   POST /upload - Upload video and extract first frame")
     print("   POST /coords - Receive coordinates from frontend")
     print("   POST /segment - Run SAM2 segmentation")
-    print("   POST /process_video - Process full video with SAM2")
+    print("   POST /process_video - Process full video with SAM2 and OpenPose")
+    print("   POST /process_video_openpose - Process video with OpenPose only")
+    print("   POST /run_openpose_on_masked_video - Run OpenPose on existing masked video")
     print("=" * 80)
+    yield
+    # Shutdown
+    print("🛑 Backend server shutting down...")
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,32 +63,64 @@ app.add_middleware(
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
     try:
+        print(f"Received upload request for file: {file.filename}")
+        
         # 1. Upload video to S3
         contents = await file.read()
-        s3_client.put_object(
-            Bucket=AWS_S3_BUCKET_NAME,
-            Key=file.filename,
-            Body=contents,
-            ContentType=file.content_type
-        )
+        print(f"File size: {len(contents)} bytes")
 
-        # 2. Save video to temp file and extract first frame
+        # Save video to temp file first
         with tempfile.TemporaryDirectory() as tmpdir:
             local_video_path = os.path.join(tmpdir, file.filename)
+            first_frame_path = os.path.join(tmpdir, 'first_frame.jpg')
+            
+            # Write the file contents
             with open(local_video_path, 'wb') as f:
                 f.write(contents)
-            first_frame_path = os.path.join(tmpdir, 'first_frame.jpg')
-            # Call inference.py to extract first frame
-            subprocess.run([
-                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
-                '--input', local_video_path,
-                '--output', first_frame_path
-            ], check=True)
+            
+            print(f"Saved video to: {local_video_path}")
+
+            # Upload to S3
+            try:
+                s3_client.put_object(
+                    Bucket=AWS_S3_BUCKET_NAME,
+                    Key=file.filename,
+                    Body=contents,
+                    ContentType=file.content_type
+                )
+                print(f"Uploaded to S3: {file.filename}")
+            except Exception as s3_error:
+                print(f"S3 upload error: {s3_error}")
+                # Continue even if S3 upload fails
+            
+            # Extract first frame directly (much faster)
+            try:
+                import cv2
+                cap = cv2.VideoCapture(local_video_path)
+                if not cap.isOpened():
+                    return JSONResponse(status_code=500, content={"error": "Could not open video file"})
+                
+                ret, frame = cap.read()
+                cap.release()
+                
+                if not ret:
+                    return JSONResponse(status_code=500, content={"error": "Could not read first frame"})
+                
+                success = cv2.imwrite(first_frame_path, frame)
+                if not success:
+                    return JSONResponse(status_code=500, content={"error": "Could not save first frame"})
+                
+                print(f"First frame extracted successfully: {first_frame_path}")
+            except Exception as e:
+                print(f"Frame extraction failed: {e}")
+                return JSONResponse(status_code=500, content={"error": f"Frame extraction failed: {str(e)}"})
+            
             # Copy first frame to static directory
             static_dir = os.path.join(os.path.dirname(__file__), 'static')
             os.makedirs(static_dir, exist_ok=True)
             static_frame_path = os.path.join(static_dir, f'{file.filename}_first_frame.jpg')
             shutil.copy(first_frame_path, static_frame_path)
+            print(f"Copied frame to: {static_frame_path}")
 
         # 3. Return the static URL for the first frame
         return {
@@ -92,6 +130,9 @@ async def upload_video(file: UploadFile = File(...)):
             "first_frame_url": f"/static/{file.filename}_first_frame.jpg"
         }
     except Exception as e:
+        print(f"Upload error: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 from fastapi.staticfiles import StaticFiles
@@ -126,7 +167,8 @@ async def root():
             "upload": "POST /upload",
             "coords": "POST /coords", 
             "segment": "POST /segment",
-            "process_video": "POST /process_video"
+            "process_video": "POST /process_video",
+            "run_openpose_on_masked_video": "POST /run_openpose_on_masked_video"
         }
     }
 
@@ -225,7 +267,7 @@ async def process_full_video(request: Request):
         output_video_path = os.path.join(static_dir, output_video_filename)
         
         try:
-            # Run full video processing
+            # Run full video processing with SAM2 and OpenPose
             print(f"Starting full video processing for {video_filename}")
             subprocess.run([
                 'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
@@ -236,8 +278,9 @@ async def process_full_video(request: Request):
             
             if os.path.exists(output_video_path):
                 return {
-                    "message": "Full video processing completed",
-                    "masked_video_url": f"/video/{output_video_filename}"
+                    "message": "Full video processing completed with SAM2 and OpenPose",
+                    "masked_video_url": f"/video/{output_video_filename}",
+                    "has_landmarks": True
                 }
             else:
                 return JSONResponse(status_code=500, content={"error": "Video processing failed"})
@@ -250,3 +293,135 @@ async def process_full_video(request: Request):
                 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)}) 
+
+@app.post("/process_video_openpose")
+async def process_video_with_openpose(request: Request):
+    """Process a video with OpenPose to create video with landmarks."""
+    try:
+        data = await request.json()
+        video_filename = data.get('video_filename')
+        
+        if not video_filename:
+            return JSONResponse(status_code=400, content={"error": "Missing video_filename"})
+        
+        # Download video from S3 to local temp file
+        print(f"Downloading video {video_filename} from S3 for OpenPose processing...")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{video_filename}") as temp_video:
+            try:
+                # Download from S3
+                s3_client.download_file(
+                    Bucket=AWS_S3_BUCKET_NAME,
+                    Key=video_filename,
+                    Filename=temp_video.name
+                )
+                video_path = temp_video.name
+                print(f"Video downloaded to: {video_path}")
+            except Exception as e:
+                return JSONResponse(status_code=404, content={"error": f"Could not download video from S3: {str(e)}"})
+        
+        # Create output paths
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        os.makedirs(static_dir, exist_ok=True)
+        output_video_filename = f'{video_filename}_openpose.mp4'
+        output_video_path = os.path.join(static_dir, output_video_filename)
+        
+        # Extract frames from video
+        video_id = os.path.splitext(os.path.basename(video_path))[0]
+        frame_dir = f"/tmp/{video_id}_frames"
+        os.makedirs(frame_dir, exist_ok=True)
+        
+        # Extract frames using ffmpeg
+        subprocess.run([
+            'ffmpeg', '-i', video_path, 
+            '-vf', 'fps=30',
+            '-frame_pts', '1',
+            os.path.join(frame_dir, '%05d.jpg')
+        ], check=True)
+        
+        # Run OpenPose on frames
+        openpose_json_dir = f"/tmp/{video_id}_openpose_json"
+        
+        # Import the OpenPose function
+        from inference import run_openpose_on_masked_frames
+        
+        openpose_success = run_openpose_on_masked_frames(
+            frame_dir, 
+            openpose_json_dir, 
+            output_video_path
+        )
+        
+        if openpose_success and os.path.exists(output_video_path):
+            return {
+                "message": "OpenPose processing completed",
+                "openpose_video_url": f"/video/{output_video_filename}",
+                "has_landmarks": True
+            }
+        else:
+            return JSONResponse(status_code=500, content={"error": "OpenPose processing failed"})
+        
+        # Clean up temporary files
+        if os.path.exists(video_path):
+            os.unlink(video_path)
+        import shutil
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        shutil.rmtree(openpose_json_dir, ignore_errors=True)
+                
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/run_openpose_on_masked_video")
+async def run_openpose_on_masked_video(request: Request):
+    """Run OpenPose on an existing masked video to add landmarks."""
+    try:
+        data = await request.json()
+        masked_video_filename = data.get('masked_video_filename')
+        
+        if not masked_video_filename:
+            return JSONResponse(status_code=400, content={"error": "Missing masked_video_filename"})
+        
+        # Check if the masked video exists in static directory
+        static_dir = os.path.join(os.path.dirname(__file__), 'static')
+        masked_video_path = os.path.join(static_dir, masked_video_filename)
+        
+        if not os.path.exists(masked_video_path):
+            return JSONResponse(status_code=404, content={"error": "Masked video not found"})
+        
+        print(f"Running OpenPose on masked video: {masked_video_filename}")
+        
+        # Create output paths
+        output_video_filename = masked_video_filename.replace('.mp4', '_with_landmarks.mp4')
+        output_video_path = os.path.join(static_dir, output_video_filename)
+        
+        # Use the inference.py script directly
+        try:
+            result = subprocess.run([
+                'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
+                '--openpose', masked_video_path
+            ], capture_output=True, text=True)
+            print(f"OpenPose processing output: {result.stdout}")
+            
+            # Check if the output file was created (this is the real success indicator)
+            if os.path.exists(output_video_path):
+                return {
+                    "message": "OpenPose processing completed on masked video",
+                    "landmarked_video_url": f"/video/{output_video_filename}",
+                    "has_landmarks": True
+                }
+            else:
+                # If file doesn't exist, check if there was an error
+                if result.returncode != 0:
+                    print(f"OpenPose processing error: {result.stderr}")
+                    return JSONResponse(status_code=500, content={"error": f"OpenPose processing failed: {result.stderr}"})
+                else:
+                    return JSONResponse(status_code=500, content={"error": "OpenPose processing failed - output file not created"})
+                
+        except subprocess.CalledProcessError as e:
+            print(f"OpenPose processing error: {e.stderr}")
+            return JSONResponse(status_code=500, content={"error": f"OpenPose processing failed: {e.stderr}"})
+                
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
