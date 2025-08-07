@@ -5,26 +5,23 @@ export default function Home() {
   const [message, setMessage] = useState('');
   const [firstFrameUrl, setFirstFrameUrl] = useState(null);
   const [points, setPoints] = useState([]);
-  const [segmentedImageUrl, setSegmentedImageUrl] = useState(null);
-  const [isSegmenting, setIsSegmenting] = useState(false);
-  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
   const [videoFilename, setVideoFilename] = useState(null);
-  const [imageRef, setImageRef] = useState(null);
+  const [s3Folder, setS3Folder] = useState(null); // Add S3 folder state
+  const [isSegmenting, setIsSegmenting] = useState(false);
+  const [segmentedImageUrl, setSegmentedImageUrl] = useState(null);
+  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
   const [maskedVideoUrl, setMaskedVideoUrl] = useState(null);
+  const [maskedVideoFilename, setMaskedVideoFilename] = useState(null);
   const [isRunningOpenPose, setIsRunningOpenPose] = useState(false);
   const [landmarkedVideoUrl, setLandmarkedVideoUrl] = useState(null);
-  const [maskedVideoFilename, setMaskedVideoFilename] = useState(null);
   const [currentStep, setCurrentStep] = useState(0);
+  const [imageRef, setImageRef] = useState(null);
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
+    setMessage('');
     setFirstFrameUrl(null);
     setPoints([]);
-    setSegmentedImageUrl(null);
-    setMaskedVideoUrl(null);
-    setLandmarkedVideoUrl(null);
-    setVideoFilename(null);
-    setMaskedVideoFilename(null);
     setCurrentStep(0);
   };
 
@@ -45,6 +42,7 @@ export default function Home() {
       if (res.ok) {
         setMessage('Upload successful. Please select points on the image below.');
         setVideoFilename(data.video_filename);
+        setS3Folder(data.s3_folder); // Store S3 folder
         let url = data.first_frame_url;
         if (url && !url.startsWith('http')) {
           url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
@@ -136,7 +134,10 @@ export default function Home() {
   };
 
   const handleAcceptSegmentation = async () => {
-    if (!points.length || !videoFilename) return;
+    if (!points.length || !videoFilename) {
+      setMessage('Error: No points or video filename available');
+      return;
+    }
     
     setIsProcessingVideo(true);
     setMessage('Processing full video with SAM2... This may take a few minutes.');
@@ -147,24 +148,21 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           points: points,
-          video_filename: videoFilename 
+          video_filename: videoFilename,
+          s3_folder: s3Folder // Pass S3 folder
         }),
       });
       
       const data = await res.json();
       
       if (res.ok) {
-        setMessage('Full video processing completed.');
-        
-        if (data.masked_video_filename) {
-          setMaskedVideoFilename(data.masked_video_filename);
-        }
-        
+        setMessage('Video processing completed.');
         let url = data.masked_video_url;
         if (url && !url.startsWith('http')) {
           url = `${process.env.NEXT_PUBLIC_API_URL}${url}`;
         }
         setMaskedVideoUrl(url);
+        setMaskedVideoFilename(data.masked_video_filename);
         setCurrentStep(3);
       } else {
         setMessage('Error: ' + (data.error || 'Video processing failed'));
@@ -190,7 +188,8 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          masked_video_filename: maskedVideoFilename
+          masked_video_filename: maskedVideoFilename,
+          s3_folder: s3Folder // Pass S3 folder
         }),
       });
       

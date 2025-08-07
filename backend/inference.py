@@ -4,12 +4,88 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-import argparse
 import cv2
+from scipy import ndimage
+from scipy.spatial.distance import cdist
 import tempfile
 import shutil
-import torch
+import argparse
 import subprocess
+import boto3
+from dotenv import load_dotenv
+import torch
+
+load_dotenv()
+
+# S3 configuration
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_S3_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
+AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_REGION
+)
+
+def upload_file_to_s3(local_path, s3_key):
+    """Upload a file to S3."""
+    try:
+        with open(local_path, 'rb') as f:
+            s3_client.put_object(
+                Bucket=AWS_S3_BUCKET_NAME,
+                Key=s3_key,
+                Body=f.read()
+            )
+        print(f"✅ Uploaded to S3: {s3_key}")
+        return True
+    except Exception as e:
+        print(f"❌ S3 upload error for {s3_key}: {e}")
+        return False
+
+def save_landmark_json(landmarks, frame_number, output_dir):
+    """Save landmark coordinates to a JSON file."""
+    if landmarks is None or len(landmarks) == 0:
+        return None
+    
+    # OpenPose keypoint names (BODY_25 model)
+    keypoint_names = [
+        "nose", "neck", "right_shoulder", "right_elbow", "right_wrist",
+        "left_shoulder", "left_elbow", "left_wrist", "mid_hip", "right_hip",
+        "right_knee", "right_ankle", "left_hip", "left_knee", "left_ankle",
+        "right_eye", "left_eye", "right_ear", "left_ear", "left_big_toe",
+        "left_small_toe", "left_heel", "right_big_toe", "right_small_toe", "right_heel"
+    ]
+    
+    # Process the first person's landmarks (assuming single person)
+    person_landmarks = landmarks[0]  # First person
+    
+    landmark_data = {
+        "frame_number": frame_number,
+        "timestamp": frame_number / 30.0,  # Assuming 30 fps
+        "landmarks": []
+    }
+    
+    for i, (x, y, confidence) in enumerate(person_landmarks):
+        if confidence > 0.1:  # Only include landmarks with sufficient confidence
+            landmark_data["landmarks"].append({
+                "keypoint_id": i,
+                "keypoint_name": keypoint_names[i] if i < len(keypoint_names) else f"keypoint_{i}",
+                "x": float(x),
+                "y": float(y),
+                "confidence": float(confidence)
+            })
+    
+    # Save to JSON file
+    json_filename = f"frame_{frame_number:05d}_landmarks.json"
+    json_path = os.path.join(output_dir, json_filename)
+    
+    with open(json_path, 'w') as f:
+        json.dump(landmark_data, f, indent=2)
+    
+    return json_path
 
 # Add SAM2 to path for imports
 sys.path.append(os.path.expanduser("~/models/sam2"))
@@ -261,7 +337,7 @@ def process_video_with_sam2(video_path, points, output_video_path):
     finally:
         os.chdir(original_dir)
 
-def run_openpose_on_masked_video(masked_video_path):
+def run_openpose_on_masked_video(masked_video_path, s3_folder=None):
     """Run OpenPose on a masked video to add pose landmarks."""
     try:
         print(f"Running OpenPose on masked video: {masked_video_path}")
@@ -314,15 +390,25 @@ def run_openpose_on_masked_video(masked_video_path):
         frame_files = sorted([f for f in os.listdir(frame_dir) if f.lower().endswith('.jpg')])
         processed_frames = []
         
+        # Create JSON output directory
+        json_output_dir = f"/tmp/{video_id}_landmark_jsons"
+        os.makedirs(json_output_dir, exist_ok=True)
+        
         print(f"Processing {len(frame_files)} frames with OpenPose...")
         
-        for frame_file in frame_files:
+        for frame_idx, frame_file in enumerate(frame_files):
             frame_path = os.path.join(frame_dir, frame_file)
             datum = op.Datum()
             image = cv2.imread(frame_path)
             datum.cvInputData = image
             
             opWrapper.emplaceAndPop(op.VectorDatum([datum]))
+            
+            # Save landmark JSON for this frame
+            if datum.poseKeypoints is not None and len(datum.poseKeypoints) > 0:
+                json_path = save_landmark_json(datum.poseKeypoints, frame_idx, json_output_dir)
+                if json_path:
+                    print(f"✅ Saved landmarks for frame {frame_idx}: {json_path}")
             
             # Get processed frame with landmarks
             if datum.cvOutputData is not None:
@@ -355,9 +441,25 @@ def run_openpose_on_masked_video(masked_video_path):
             
             print(f"✅ OpenPose processing complete: {output_video_path}")
             
+            # Upload to S3 if s3_folder is provided
+            if s3_folder:
+                # Upload landmark video
+                landmark_video_s3_key = f"{s3_folder}/landmark_video/{os.path.basename(output_video_path)}"
+                upload_file_to_s3(output_video_path, landmark_video_s3_key)
+                
+                # Upload JSON files
+                json_files = [f for f in os.listdir(json_output_dir) if f.endswith('.json')]
+                for json_file in json_files:
+                    json_path = os.path.join(json_output_dir, json_file)
+                    json_s3_key = f"{s3_folder}/landmark_jsons/{json_file}"
+                    upload_file_to_s3(json_path, json_s3_key)
+                
+                print(f"✅ Uploaded {len(json_files)} JSON files to S3")
+            
             # Clean up
             shutil.rmtree(frame_dir, ignore_errors=True)
             shutil.rmtree(temp_frame_dir, ignore_errors=True)
+            shutil.rmtree(json_output_dir, ignore_errors=True)
             
             return True
         else:
@@ -386,6 +488,7 @@ def main():
     # Step 3: Apply SAM2 to full video
     parser.add_argument('--video', type=str, help='Input video file path for full video processing')
     parser.add_argument('--video_output', type=str, help='Output masked video file path')
+    parser.add_argument('--s3_folder', type=str, help='S3 folder for storing outputs')
     
     # Step 4: Run OpenPose on masked video
     parser.add_argument('--openpose', type=str, help='Masked video file path for OpenPose processing')
@@ -419,32 +522,15 @@ def main():
     # Step 4: Add OpenPose landmarks to masked video
     elif args.openpose:
         print("🕺 STEP 4: Adding OpenPose landmarks to masked video")
-        success = run_openpose_on_masked_video(args.openpose)
+        success = run_openpose_on_masked_video(args.openpose, args.s3_folder)
         if not success:
             sys.exit(1)
     
     else:
-        print("📋 SAM2 + OpenPose Processing Pipeline")
-        print()
-        print("Usage:")
-        print("  Step 1 - Extract first frame:")
-        print("    --input <video> --output <frame>")
-        print()
-        print("  Step 2 - Preview SAM2 segmentation:")
-        print("    --frame <frame> --points <json> --frame_dir <dir>")
-        print()  
-        print("  Step 3 - Apply SAM2 to full video:")
-        print("    --video <video> --points <json> --video_output <output>")
-        print()
-        print("  Step 4 - Add OpenPose landmarks:")
-        print("    --openpose <masked_video_path>")
-        print()
-        print("Complete workflow:")
-        print("  1. Upload video → Extract first frame")
-        print("  2. User clicks points → Show SAM2 preview") 
-        print("  3. Apply SAM2 to full video → Create masked video")
-        print("  4. Run OpenPose on masked video → Add pose landmarks")
+        print("❌ Invalid arguments. Use --help for usage information.")
         sys.exit(1)
+    
+    print("✅ Processing completed successfully!")
 
 if __name__ == "__main__":
     main()

@@ -9,6 +9,7 @@ import tempfile
 import subprocess
 import json
 import numpy as np
+from datetime import datetime
 
 load_dotenv()
 
@@ -23,6 +24,27 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=AWS_REGION
 )
+
+def create_s3_folder_name(video_filename):
+    """Create a timestamped folder name for S3 storage."""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    base_name = os.path.splitext(video_filename)[0]
+    return f"{base_name}_{timestamp}"
+
+def upload_file_to_s3(local_path, s3_key):
+    """Upload a file to S3."""
+    try:
+        with open(local_path, 'rb') as f:
+            s3_client.put_object(
+                Bucket=AWS_S3_BUCKET_NAME,
+                Key=s3_key,
+                Body=f.read()
+            )
+        print(f"✅ Uploaded to S3: {s3_key}")
+        return True
+    except Exception as e:
+        print(f"❌ S3 upload error for {s3_key}: {e}")
+        return False
 
 from contextlib import asynccontextmanager
 
@@ -65,7 +87,11 @@ async def upload_video(file: UploadFile = File(...)):
     try:
         print(f"Received upload request for file: {file.filename}")
         
-        # 1. Upload video to S3
+        # Create timestamped folder name
+        s3_folder = create_s3_folder_name(file.filename)
+        original_video_s3_key = f"{s3_folder}/original_video/{file.filename}"
+        
+        # 1. Upload video to S3 in timestamped folder
         contents = await file.read()
         print(f"File size: {len(contents)} bytes")
 
@@ -80,18 +106,18 @@ async def upload_video(file: UploadFile = File(...)):
             
             print(f"Saved video to: {local_video_path}")
 
-            # Upload to S3
+            # Upload to S3 in timestamped folder
             try:
                 s3_client.put_object(
                     Bucket=AWS_S3_BUCKET_NAME,
-                    Key=file.filename,
+                    Key=original_video_s3_key,
                     Body=contents,
                     ContentType=file.content_type
                 )
-                print(f"Uploaded to S3: {file.filename}")
+                print(f"✅ Uploaded to S3: {original_video_s3_key}")
             except Exception as s3_error:
-                print(f"S3 upload error: {s3_error}")
-                # Continue even if S3 upload fails
+                print(f"❌ S3 upload error: {s3_error}")
+                return JSONResponse(status_code=500, content={"error": f"S3 upload failed: {str(s3_error)}"})
             
             # Extract first frame directly (much faster)
             try:
@@ -122,11 +148,12 @@ async def upload_video(file: UploadFile = File(...)):
             shutil.copy(first_frame_path, static_frame_path)
             print(f"Copied frame to: {static_frame_path}")
 
-        # 3. Return the static URL for the first frame
+        # 3. Return the static URL for the first frame and S3 folder info
         return {
             "message": "Upload successful",
             "video_filename": file.filename,
-            "s3_key": file.filename,
+            "s3_folder": s3_folder,
+            "original_video_s3_key": original_video_s3_key,
             "first_frame_url": f"/static/{file.filename}_first_frame.jpg"
         }
     except Exception as e:
@@ -237,21 +264,23 @@ async def process_full_video(request: Request):
         data = await request.json()
         points = data.get('points', [])
         video_filename = data.get('video_filename')
+        s3_folder = data.get('s3_folder')  # Get the S3 folder from the request
         
-        if not points or not video_filename:
-            return JSONResponse(status_code=400, content={"error": "Missing points or video_filename"})
+        if not points or not video_filename or not s3_folder:
+            return JSONResponse(status_code=400, content={"error": "Missing points, video_filename, or s3_folder"})
         
         # Convert points to the format expected by SAM2
         points_np = np.array([[p['x'], p['y']] for p in points], dtype=np.float32)
         
         # Download video from S3 to local temp file
-        print(f"Downloading video {video_filename} from S3...")
+        original_video_s3_key = f"{s3_folder}/original_video/{video_filename}"
+        print(f"Downloading video {original_video_s3_key} from S3...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{video_filename}") as temp_video:
             try:
                 # Download from S3
                 s3_client.download_file(
                     Bucket=AWS_S3_BUCKET_NAME,
-                    Key=video_filename,
+                    Key=original_video_s3_key,
                     Filename=temp_video.name
                 )
                 video_path = temp_video.name
@@ -272,14 +301,21 @@ async def process_full_video(request: Request):
                 'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
                 '--video', video_path,
                 '--points', json.dumps(points_np.tolist()),
-                '--video_output', output_video_path
+                '--video_output', output_video_path,
+                '--s3_folder', s3_folder  # Pass S3 folder to inference script
             ], check=True)
             
             if os.path.exists(output_video_path):
+                # Upload masked video to S3
+                masked_video_s3_key = f"{s3_folder}/masked_video/{output_video_filename}"
+                upload_success = upload_file_to_s3(output_video_path, masked_video_s3_key)
+                
                 return {
                     "message": "Video masking completed with SAM2",
                     "masked_video_url": f"/video/{output_video_filename}",
-                    "masked_video_filename": output_video_filename,  # Add this for the next step
+                    "masked_video_filename": output_video_filename,
+                    "masked_video_s3_key": masked_video_s3_key if upload_success else None,
+                    "s3_folder": s3_folder,
                     "has_landmarks": False  # No landmarks yet, just masking
                 }
             else:
@@ -295,7 +331,7 @@ async def process_full_video(request: Request):
         print(f"Error in process_video: {e}")
         import traceback
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)}) 
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 # Removed - OpenPose processing is handled by inference.py only
 
@@ -305,9 +341,10 @@ async def run_openpose_on_masked_video(request: Request):
     try:
         data = await request.json()
         masked_video_filename = data.get('masked_video_filename')
+        s3_folder = data.get('s3_folder')  # Get the S3 folder from the request
         
-        if not masked_video_filename:
-            return JSONResponse(status_code=400, content={"error": "Missing masked_video_filename"})
+        if not masked_video_filename or not s3_folder:
+            return JSONResponse(status_code=400, content={"error": "Missing masked_video_filename or s3_folder"})
         
         # Check if the masked video exists in static directory
         static_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -330,7 +367,8 @@ async def run_openpose_on_masked_video(request: Request):
             print(f"Executing OpenPose command...")
             result = subprocess.run([
                 'python3', os.path.join(os.path.dirname(__file__), 'inference.py'),
-                '--openpose', masked_video_path
+                '--openpose', masked_video_path,
+                '--s3_folder', s3_folder  # Pass S3 folder to inference script
             ], capture_output=True, text=True, timeout=300)  # 5 minute timeout
             
             print(f"OpenPose command completed with return code: {result.returncode}")
@@ -341,9 +379,16 @@ async def run_openpose_on_masked_video(request: Request):
             # Check if the output file was created (this is the real success indicator)
             if os.path.exists(output_video_path):
                 print(f"✅ OpenPose output file created: {output_video_path}")
+                
+                # Upload landmark video to S3
+                landmark_video_s3_key = f"{s3_folder}/landmark_video/{output_video_filename}"
+                upload_success = upload_file_to_s3(output_video_path, landmark_video_s3_key)
+                
                 return {
                     "message": "OpenPose processing completed on masked video",
                     "landmarked_video_url": f"/video/{output_video_filename}",
+                    "landmarked_video_s3_key": landmark_video_s3_key if upload_success else None,
+                    "s3_folder": s3_folder,
                     "has_landmarks": True
                 }
             else:
@@ -362,21 +407,12 @@ async def run_openpose_on_masked_video(request: Request):
                         "expected_output": output_video_path,
                         "stdout": result.stdout
                     })
-                
-        except subprocess.TimeoutExpired:
-            return JSONResponse(status_code=500, content={"error": "OpenPose processing timed out"})
+                    
         except subprocess.CalledProcessError as e:
-            print(f"OpenPose processing error: {e}")
-            return JSONResponse(status_code=500, content={
-                "error": f"OpenPose processing failed: {str(e)}",
-                "stderr": getattr(e, 'stderr', ''),
-                "stdout": getattr(e, 'stdout', '')
-            })
+            print(f"OpenPose processing error: {e.stderr}")
+            return JSONResponse(status_code=500, content={"error": f"OpenPose processing failed: {e.stderr}"})
                 
     except Exception as e:
-        print(f"Error in run_openpose_on_masked_video: {e}")
-        import traceback
-        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 if __name__ == "__main__":
